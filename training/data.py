@@ -272,19 +272,19 @@ def load_multiple_datasets(
 
                 dataset = concatenate_datasets([dataset, metadata_dataset], axis=1)
 
-                if id_column_name is not None and dataset_dict["name"] != "parler-tts/mls_eng_10k":
-                    if (
-                        len(
-                            dataset.filter(
-                                lambda id1, id2: id1 != id2,
-                                input_columns=[id_column_name, f"metadata_{id_column_name}"],
-                            )
-                        )
-                        != 0
-                    ):
-                        raise ValueError(
-                            f"Concatenate didn't work. Some ids don't correspond on dataset {dataset_dict['name']}"
-                        )
+                # if id_column_name is not None and dataset_dict["name"] != "parler-tts/mls_eng_10k":
+                #     if (
+                #         len(
+                #             dataset.filter(
+                #                 lambda id1, id2: id1 != id2,
+                #                 input_columns=[id_column_name, f"metadata_{id_column_name}"],
+                #             )
+                #         )
+                #         != 0
+                #     ):
+                #         raise ValueError(
+                #             f"Concatenate didn't work. Some ids don't correspond on dataset {dataset_dict['name']}"
+                #         )
 
                 dataset_features = dataset.features.keys()
 

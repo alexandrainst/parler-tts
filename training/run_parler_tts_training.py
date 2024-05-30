@@ -203,6 +203,11 @@ def main():
         trust_remote_code=data_args.trust_remote_code,
         use_fast=model_args.use_fast_tokenizer,
     )
+    # if no pad_token, set it to <pad> token
+    if prompt_tokenizer.pad_token is None:
+        prompt_tokenizer.add_special_tokens({"pad_token": "<pad>"})
+    if description_tokenizer.pad_token is None:
+        description_tokenizer.add_special_tokens({"pad_token": "<pad>"})
 
     if model_args.use_fast_tokenizer:
         logger.warning(
@@ -606,6 +611,7 @@ def main():
     if training_args.max_steps < 0:
         num_epochs = int(training_args.num_train_epochs)
         steps_per_epoch = len(vectorized_datasets["train"]) // (train_batch_size * gradient_accumulation_steps)
+        steps_per_epoch = max(steps_per_epoch, 1)
         total_train_steps = steps_per_epoch * num_epochs
     elif training_args.max_steps > 0:
         logger.info("max_steps is given, it will override any value given in num_train_epochs")
@@ -900,6 +906,7 @@ def main():
                                 folder_path=training_args.output_dir,
                                 commit_message=f"Saving train state of step {cur_step}",
                                 run_as_future=True,
+                                private=True
                             )
 
                 if training_args.do_eval and (cur_step % eval_steps == 0 or cur_step == total_train_steps):
