@@ -5,7 +5,7 @@ accelerate launch ./training/run_parler_tts_training.py \
     --prompt_tokenizer_name "RJuro/munin-neuralbeagle-7b" \
     --report_to "wandb" \
     --overwrite_output_dir true \
-    --load_from_disk "/home/alex-admin/nota_tts/data/final/dataset-split-train" \
+    --load_from_disk "data/final/dataset" \
     --train_dataset_config_name "default" \
     --eval_dataset_config_name "default" \
     --eval_split_name "dev" \
@@ -33,9 +33,9 @@ accelerate launch ./training/run_parler_tts_training.py \
     --audio_encoder_per_device_batch_size 5 \
     --dtype "float16" \
     --seed 456 \
-    --output_dir "/mnt/nota-NAS/output_dir_training/" \
-    --temporary_save_to_disk "/mnt/nota-NAS/audio_code_tmp/" \
-    --save_to_disk "/mnt/nota-NAS/tmp_dataset_audio/" \
+    --output_dir "output_dir_training/" \
+    --temporary_save_to_disk "audio_code_tmp/" \
+    --save_to_disk "tmp_dataset_audio/" \
     --dataloader_num_workers 8 \
     --predict_with_generate \
     --include_inputs_for_metrics \
@@ -43,20 +43,10 @@ accelerate launch ./training/run_parler_tts_training.py \
     --asr_model_name_or_path "jstoone/whisper-medium-da" \
     --id_column_name "id" \
     --preprocessing_num_workers 1 \
-    --cache_dir "/home/alex-admin/.cache" \
-    --token "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" \
     --trust_remote_code true \
-    --cache_dir "/home/alex-admin/.cache" \
-    --resume_from_checkpoint "/mnt/nota-NAS/output_dir_training/checkpoint-160000-epoch-7" \
-    --save_steps 10000 
+    --resume_from_checkpoint "" \
+    --save_steps 10000 \
+    --samples_per_train_split 10000
     # --preprocessing_only
     # --do_eval \
     
-
-
-# # --dtype "float16"
-# # google/flan-t5-base
-#     --description_tokenizer_name "google/flan-t5-base" \
-#     --prompt_tokenizer_name "google/flan-t5-base" \
-#     # --description_tokenizer_name "RJuro/munin-neuralbeagle-7b" \
-#     # --prompt_tokenizer_name "RJuro/munin-neuralbeagle-7b" \
