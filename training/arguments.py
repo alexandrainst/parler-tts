@@ -300,7 +300,10 @@ class DataTrainingArguments:
         default=2,
         metadata={"help": ("Pad to multiple of for tokenizers.")},
     )
-
+    samples_per_train_split: int = field(
+        default=10000,
+        metadata={"help": "Split train set into multiple datasets while preprocessing."},
+    )
 
 @dataclass
 class ParlerTTSTrainingArguments(Seq2SeqTrainingArguments):
