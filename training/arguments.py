@@ -90,6 +90,12 @@ class DataTrainingArguments:
     the command line.
     """
 
+    load_from_disk: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "If set, will load the dataset from this path. If not specified, will download and cache the dataset from `train_dataset_name`."
+        },
+    )
     train_dataset_name: str = field(
         default=None,
         metadata={
@@ -294,7 +300,10 @@ class DataTrainingArguments:
         default=2,
         metadata={"help": ("Pad to multiple of for tokenizers.")},
     )
-
+    samples_per_train_split: int = field(
+        default=10000,
+        metadata={"help": "Split train set into multiple datasets while preprocessing."},
+    )
 
 @dataclass
 class ParlerTTSTrainingArguments(Seq2SeqTrainingArguments):
@@ -310,4 +319,8 @@ class ParlerTTSTrainingArguments(Seq2SeqTrainingArguments):
     audio_encoder_per_device_batch_size: int = field(
         default=8,
         metadata={"help": ("Specify the batch size of the audio encoding pre-processing steps.")},
+    )
+    save_steps: int = field(
+        default=5000,
+        metadata={"help": "Save checkpoint every X updates steps."},
     )

@@ -16,8 +16,9 @@
 
 """ Train Parler-TTS using 🤗 Accelerate"""
 
-import logging
+
 import os
+import logging
 import re
 import sys
 import time
@@ -225,6 +226,24 @@ def main():
     dataset_was_precomputed = len(os.listdir(data_args.save_to_disk)) > 0
     if dataset_was_precomputed:
         vectorized_datasets = datasets.load_from_disk(data_args.save_to_disk)
+    elif data_args.load_from_disk:
+        raw_datasets = datasets.load_from_disk(data_args.load_from_disk)
+
+        num_splits = raw_datasets["train"].num_rows // data_args.samples_per_train_split + 1
+        for split_idx in range(1, num_splits):
+            split = f"train{split_idx}"
+            # Take data_args.samples_per_train_split samples from the training set
+            raw_datasets[split] = raw_datasets["train"].select(range(data_args.samples_per_train_split * (split_idx - 1), data_args.samples_per_train_split * split_idx))
+
+        # Take remaining samples from the training set to the last split
+        raw_datasets[f"train{num_splits}"] = raw_datasets["train"].select(range(data_args.samples_per_train_split * (num_splits - 1), raw_datasets["train"].num_rows))
+
+        # Delete "train" split
+        del raw_datasets["train"]
+
+        for split in raw_datasets:
+            raw_datasets[split] = raw_datasets[split].cast_column(data_args.target_audio_column_name, datasets.features.Audio(sampling_rate=sampling_rate))
+
     else:
         raw_datasets = DatasetDict()
 
@@ -252,6 +271,7 @@ def main():
                 audio_column_name=data_args.target_audio_column_name,
                 sampling_rate=sampling_rate,
                 logger=logger,
+                token=data_args.token,
                 # streaming=data_args.streaming, TODO(SG): optionally enable streaming mode
             )
 
@@ -267,7 +287,7 @@ def main():
                 raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
 
         if training_args.do_eval:
-            raw_datasets["eval"] = load_multiple_datasets(
+            raw_datasets[data_args.eval_split_name] = load_multiple_datasets(
                 accelerator,
                 data_args.eval_dataset_name if data_args.eval_dataset_name else data_args.train_dataset_name,
                 data_args.eval_dataset_config_name
@@ -287,8 +307,8 @@ def main():
             )
 
             if data_args.max_eval_samples is not None:
-                raw_datasets["eval"] = (
-                    raw_datasets["eval"].shuffle(seed=training_args.seed).select(range(data_args.max_eval_samples))
+                raw_datasets[data_args.eval_split_name] = (
+                    raw_datasets[data_args.eval_split_name].shuffle(seed=training_args.seed).select(range(data_args.max_eval_samples))
                 )
 
     # 3. Next, let's load the config.
@@ -419,6 +439,7 @@ def main():
             return output
 
         for split in vectorized_datasets:
+            logger.info(f"Encoding audio for split {split}")
             data_loader = DataLoader(
                 raw_datasets[split],
                 batch_size=training_args.audio_encoder_per_device_batch_size,
@@ -439,6 +460,22 @@ def main():
                     lab = generate_labels["labels"].cpu().transpose(1, 2).to(torch.int16)
                     rat = generate_labels["ratio"].cpu().squeeze()
                     lens = generate_labels["len_audio"].cpu().squeeze()
+
+                    if len(lab.shape) == 0:
+                        logger.info(f"lab: {lab.shape}")
+                        lab = lab.unsqueeze(0)
+                        logger.info(f"lab: {lab.shape}")
+                    if len(rat.shape) == 0:
+                        logger.info(f"rat: {rat.shape}")
+                        rat = rat.unsqueeze(0)
+                        logger.info(f"rat: {rat.shape}")
+                    if len(lens.shape) == 0:
+                        logger.info(f"lens: {lens.shape}")
+                        lens = lens.unsqueeze(0)
+                        logger.info(f"lens: {lens.shape}")
+                    
+                    assert lab.shape[0] == rat.shape[0] == lens.shape[0], f"lab: {lab.shape}, rat: {rat.shape}, lens: {lens.shape}"
+
                     lab = [l[:, : int(ratio * length)] for (l, ratio, length) in zip(lab, rat, lens)]
 
                     all_generated_labels.extend(lab)
@@ -446,19 +483,27 @@ def main():
 
             # (1, codebooks, seq_len) where seq_len=1
             bos_labels = torch.ones((1, num_codebooks, 1)) * audio_encoder_bos_token_id
-
+            logger.info(f"Generated labels for split {split}")
             if accelerator.is_main_process:
+                logger.info(f"Making labels as dataset")
+                logger.info(f"List lengths: {len(all_generated_labels)}, {len(all_lens)}")
                 tmp_labels = Dataset.from_dict({"labels": all_generated_labels, "target_length": all_lens})
+                logger.info(f"Saving generated labels for split {split}")            
+
                 tmp_labels.save_to_disk(
                     os.path.join(data_args.temporary_save_to_disk, split),
-                    num_proc=1 if split == "eval" else data_args.preprocessing_num_workers,
+                    num_proc=1 if split == data_args.eval_split_name else data_args.preprocessing_num_workers,
                 )
             accelerator.wait_for_everyone()
             del all_generated_labels
 
+            logger.info(f"Loading generated labels for split {split}")
             tmp_labels = datasets.load_from_disk(os.path.join(data_args.temporary_save_to_disk, split))
+            logger.info(f"Loaded generated labels for split {split}")
             with accelerator.main_process_first():
+                logger.info(f"Concatenating labels for split {split}")
                 vectorized_datasets[split] = concatenate_datasets([vectorized_datasets[split], tmp_labels], axis=1)
+                logger.info(f"Concatenated labels for split {split}")
 
             def postprocess_dataset(labels):
                 # (1, codebooks, seq_len)
@@ -488,6 +533,7 @@ def main():
                 output = {"labels": labels[:, 1:]}
                 return output
 
+            logger.info(f"Postprocessing labels for split {split}")
             with accelerator.main_process_first():
                 vectorized_datasets[split] = vectorized_datasets[split].map(
                     postprocess_dataset,
@@ -495,6 +541,7 @@ def main():
                     input_columns=["labels"],
                     desc="Postprocessing labeling",
                 )
+            logger.info(f"Postprocessed labels for split {split}")
 
         accelerator.free_memory()
         del generate_labels, all_lens
@@ -508,48 +555,72 @@ def main():
                 return length > min_target_length and length < max_target_length
 
             # filter data that is shorter than min_target_length
+            logger.info(f"Filtering audio that is shorter than {min_target_length} and longer than {max_target_length}")
             vectorized_datasets = vectorized_datasets.filter(
                 is_audio_in_length_range,
                 num_proc=num_workers,
                 input_columns=["target_length"],
             )
+            logger.info(f"Done filtering audio")
 
             if description_column_name is not None and data_args.max_description_token_length is not None:
                 with accelerator.main_process_first():
                     # filter description that is shorter than max_text_length
+                    logger.info(f"Filtering description that is shorter than {data_args.max_description_token_length}")
                     vectorized_datasets = vectorized_datasets.filter(
                         lambda x: len(x) < data_args.max_description_token_length,
                         num_proc=num_workers,
                         input_columns=["input_ids"],
                     )
+                    logger.info(f"Done filtering description")  
 
             if data_args.max_prompt_token_length is not None:
                 with accelerator.main_process_first():
                     # filter description that is shorter than max_text_length
+                    logger.info(f"Filtering prompt that is shorter than {data_args.max_prompt_token_length}")
                     vectorized_datasets = vectorized_datasets.filter(
                         lambda x: len(x) < data_args.max_prompt_token_length,
                         num_proc=num_workers,
                         input_columns=["prompt_input_ids"],
                     )
+                    logger.info(f"Done filtering prompt")
 
     if data_args.save_to_disk is not None and not dataset_was_precomputed:
         if accelerator.is_main_process:
+            logger.info(f"Saving dataset at {data_args.save_to_disk}")
             vectorized_datasets.save_to_disk(
                 data_args.save_to_disk,
-                num_proc=min(data_args.preprocessing_num_workers, len(vectorized_datasets["eval"]) - 1),
+                num_proc=min(data_args.preprocessing_num_workers, len(vectorized_datasets[data_args.eval_split_name]) - 1),
             )
         logger.info(f"Dataset saved at {data_args.save_to_disk}")
+
+
+    # Initialize train split in vectorized_datasets, where train1, train2, ... are merged
+    vectorized_datasets["train"] = vectorized_datasets["train1"]
+    split_idx = 2
+    for split in vectorized_datasets:
+        if "train" not in split:
+            continue
+        split = f"train{split_idx}"
+        logger.info(f"Concatenating {split} with train")
+        vectorized_datasets["train"] = concatenate_datasets([vectorized_datasets["train"], vectorized_datasets[split]])
+        del vectorized_datasets[split]
+        split_idx += 1
+
+    logger.info(f"Done merging train splits")
 
     audio_max_length = None
     if padding == "max_length":
         audio_max_length = max(vectorized_datasets["train"]["target_length"])
         with accelerator.main_process_first():
+            logger.info(f"Max audio length: {audio_max_length}")
             max_sample = vectorized_datasets["train"].filter(
                 lambda x: x == audio_max_length,
                 num_proc=num_workers,
                 input_columns=["target_length"],
             )
         audio_max_length = torch.tensor(max_sample[0]["labels"]).shape[1]
+        logger.info(f"Max audio length after padding: {audio_max_length}")
 
     if training_args.group_by_length:
         # apply a simple heuristic to take into account audio and text lengths
@@ -557,12 +628,13 @@ def main():
             return {"target_length": target_length + len(prompt) + len(description)}
 
         with accelerator.main_process_first():
+            logger.info("Adding target lengths")
             vectorized_datasets = vectorized_datasets.map(
                 add_target_lengths,
                 num_proc=num_workers,
                 input_columns=["target_length", "prompt_input_ids", "input_ids"],
             )
-
+            logger.info("Added target lengths")
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with ``args.preprocessing_only`` since there will mostly likely
     # be a timeout when running the script in distributed mode.
@@ -922,7 +994,7 @@ def main():
                     batch = release_memory(batch)
 
                     validation_dataloader = DataLoader(
-                        vectorized_datasets["eval"],
+                        vectorized_datasets[data_args.eval_split_name],
                         collate_fn=data_collator,
                         batch_size=per_device_eval_batch_size,
                         drop_last=False,
@@ -944,7 +1016,7 @@ def main():
 
                     if training_args.predict_with_generate:
                         validation_dataloader = DataLoader(
-                            vectorized_datasets["eval"],
+                            vectorized_datasets[data_args.eval_split_name],
                             collate_fn=data_collator,
                             batch_size=per_device_eval_batch_size,
                             drop_last=False,
@@ -995,7 +1067,7 @@ def main():
                                 audios,
                                 sampling_rate=sampling_rate,
                                 step=cur_step,
-                                prefix="eval",
+                                prefix=data_args.eval_split_name,
                             )
 
                     # Print metrics and update progress bar
@@ -1010,7 +1082,7 @@ def main():
                         train_time=eval_time,
                         step=cur_step,
                         epoch=epoch,
-                        prefix="eval",
+                        prefix=data_args.eval_split_name,
                     )
 
                     # release eval batch and relax metrics

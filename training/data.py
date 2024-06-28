@@ -191,6 +191,7 @@ def load_multiple_datasets(
     sampling_rate: Optional[int] = None,
     audio_column_name: Optional[str] = None,
     logger: Optional[logging.Logger] = None,
+    token: Optional[str] = None,
     **kwargs,
 ) -> Union[Dataset, IterableDataset]:
     dataset_names_dict = convert_dataset_str_to_list(
@@ -212,6 +213,7 @@ def load_multiple_datasets(
                 dataset_dict["config"],
                 split=dataset_dict["split"],
                 streaming=streaming,
+                token=token,
                 **kwargs,
             )
             dataset_features = dataset.features.keys()
